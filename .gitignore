@@ -1,0 +1,37 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets / local env files
+.env
+.env.*
+!.env.example
+
+# Local judge / challenge-only files
+judge_simulator.py
+challenge-brief.md
+challenge-testing-brief.md
+engagement-design.md
+engagement-research.md
+examples/
+dataset/generate_dataset.py
+
+# Backups
+app_backup/
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
