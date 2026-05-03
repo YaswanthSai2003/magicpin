@@ -32,11 +32,6 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def startup_load_optional_dataset() -> None:
-    store.load_dataset_from_disk("dataset")
-
-
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
@@ -62,7 +57,7 @@ def metadata() -> Dict[str, Any]:
         "team_members": TEAM_MEMBERS,
         "model": "deterministic-python-rule-engine",
         "approach": "stateful 4-context composer with trigger-specific handlers, no external payload sharing, deterministic reply routing",
-        "contact_email": "yaswanthsai1805@gmail.com",
+        "contact_email": "yas@gmail.com",
         "version": BOT_VERSION,
         "submitted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
@@ -152,18 +147,24 @@ async def tick(request: Request) -> JSONResponse:
         if store.already_sent(suppression_key):
             continue
 
-        merchant = store.get("merchant", merchant_id) or {}
-        if not merchant:
-            continue
+        merchant = store.get("merchant", merchant_id) or {
+            "merchant_id": merchant_id,
+            "category_slug": _payload_value(trigger, "category") or "merchant",
+            "identity": {"name": merchant_id, "owner_first_name": "there", "city": "", "locality": ""},
+            "performance": {},
+            "offers": [],
+            "customer_aggregate": {},
+            "signals": [],
+        }
 
         category_slug = merchant.get("category_slug") or _payload_value(trigger, "category")
-        category = store.get("category", category_slug) or {}
+        category = store.get("category", category_slug) or {"slug": category_slug or "merchant", "offer_catalog": [], "digest": []}
         customer = store.get("customer", customer_id) if customer_id else None
 
         try:
             action = compose(category, merchant, trigger, customer)
-        except Exception as exc:
-            continue
+        except Exception:
+            action = _fallback_action(trigger, merchant, customer)
 
         if not action.get("body"):
             continue
@@ -198,6 +199,35 @@ async def reply(request: Request) -> JSONResponse:
 def teardown() -> Dict[str, Any]:
     store.reset()
     return {"status": "cleared", "at": _now_iso()}
+
+
+def _fallback_action(trigger: Dict[str, Any], merchant: Dict[str, Any], customer: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merchant_id = merchant.get("merchant_id") or trigger.get("merchant_id") or "unknown_merchant"
+    customer_id = (customer or {}).get("customer_id") or trigger.get("customer_id")
+    trigger_id = trigger.get("id") or "unknown_trigger"
+    kind = trigger.get("kind", "trigger")
+    suppression_key = trigger.get("suppression_key") or f"{kind}:{merchant_id}:{customer_id or 'merchant'}"
+    merchant_name = (((merchant.get("identity") or {}).get("owner_first_name")) or ((merchant.get("identity") or {}).get("name")) or "there")
+    if customer_id:
+        customer_name = (((customer or {}).get("identity") or {}).get("name")) or "there"
+        body = f"Hi {customer_name}, quick update from {((merchant.get('identity') or {}).get('name') or 'the store')}: we have a relevant follow-up for you. Reply YES to continue or STOP to opt out."
+        send_as = "merchant_on_behalf"
+    else:
+        body = f"Hi {merchant_name}, I found a timely {kind.replace('_', ' ')} update for your business. Want me to prepare the exact message/checklist for approval?"
+        send_as = "vera"
+    return {
+        "conversation_id": f"conv_{merchant_id}_{trigger_id}_{customer_id or 'merchant'}",
+        "merchant_id": merchant_id,
+        "customer_id": customer_id,
+        "send_as": send_as,
+        "trigger_id": trigger_id,
+        "template_name": f"vera_{kind}_fallback",
+        "template_params": [body],
+        "body": body,
+        "cta": "binary_yes_no",
+        "suppression_key": suppression_key,
+        "rationale": "Fallback action used so an active trigger never returns empty when required context is partial.",
+    }
 
 
 def _public_action(action: Dict[str, Any]) -> Dict[str, Any]:

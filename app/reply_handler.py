@@ -72,6 +72,11 @@ def handle_reply(payload: Dict[str, Any]) -> Dict[str, Any]:
     conv = store.add_inbound_turn(conversation_id, msg, merchant_id, customer_id)
     merchant = store.get("merchant", merchant_id) or {}
     category = store.get("category", merchant.get("category_slug")) or {}
+    from_role = str(payload.get("from_role", "") or "").lower()
+    is_customer = from_role == "customer" or bool(customer_id)
+
+    if is_customer and not _matches(msg_norm, STOP_PATTERNS) and not _matches(msg_norm, AUTO_REPLY_PATTERNS):
+        return _handle_customer_reply(conversation_id, payload, merchant, msg_norm)
 
     if _matches(msg_norm, STOP_PATTERNS):
         store.mark_opt_out(merchant_id)
@@ -112,25 +117,53 @@ def handle_reply(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _handle_auto_reply(conversation_id: str, msg_norm: str) -> Dict[str, Any]:
-    count = store.auto_reply_counts.get(msg_norm, 0) + 1
-    store.auto_reply_counts[msg_norm] = count
-
     conv = store.get_conversation(conversation_id)
     conv["auto_reply_count"] = conv.get("auto_reply_count", 0) + 1
+    count = conv["auto_reply_count"]
 
     if count == 1:
-        body = "Looks like a WhatsApp Business auto-reply 😊 When the owner sees this, just reply YES and I’ll continue with the draft/checklist."
-        return _send(conversation_id, body, "binary_yes_no", "Detected first canned auto-reply; sending one owner-facing prompt only.")
-    if count == 2:
         return {
             "action": "wait",
-            "wait_seconds": 86400,
-            "rationale": "Same canned auto-reply seen twice; owner is likely not at the phone, so wait 24 hours.",
+            "wait_seconds": 3600,
+            "rationale": "Detected WhatsApp Business auto-reply; waiting instead of burning another owner-facing turn.",
         }
     return {
         "action": "end",
-        "rationale": "Repeated WhatsApp Business auto-reply pattern detected 3+ times; ending to avoid burning turns.",
+        "rationale": "Repeated auto-reply in this conversation; ending to avoid a loop.",
     }
+
+
+def _handle_customer_reply(conversation_id: str, payload: Dict[str, Any], merchant: Dict[str, Any], msg_norm: str) -> Dict[str, Any]:
+    customer_id = payload.get("customer_id")
+    customer = store.get("customer", customer_id) or {}
+    identity = customer.get("identity") or {}
+    name = str(identity.get("name") or "there").split("(")[0].strip()
+    clinic = (merchant.get("identity") or {}).get("name") or "the clinic"
+
+    slot_text = _extract_slot(str(payload.get("message", "")))
+    if _matches(msg_norm, COMMIT_PATTERNS) or slot_text:
+        if slot_text:
+            body = f"Done {name} — I’ve selected {slot_text} for you at {clinic}. The team will confirm the booking shortly. Reply CHANGE if you want another slot, or STOP to opt out."
+        else:
+            body = f"Done {name} — I’ll share this with {clinic} and keep the next step ready. Reply with your preferred time if you want a booking slot, or STOP to opt out."
+        return _send(conversation_id, body, "none", "Customer reply handled as customer-facing booking/confirmation flow.")
+
+    if "change" in msg_norm or "other" in msg_norm or "different" in msg_norm:
+        body = f"Sure {name}. Please send your preferred day/time, and {clinic} will try to match it."
+        return _send(conversation_id, body, "open_ended", "Customer wants an alternate slot; asking only for the missing slot preference.")
+
+    body = f"Thanks {name}. I’ll pass this to {clinic}. Reply with a preferred slot if you want us to book, or STOP to opt out."
+    return _send(conversation_id, body, "open_ended", "Generic customer reply routed with customer voice, not merchant voice.")
+
+
+def _extract_slot(message: str) -> str:
+    m = re.search(r"(?:for\s+)?((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d{1,2}\s+[a-z]{3,9},?\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))", message, re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"(\d{1,2}\s+[a-z]{3,9},?\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))", message, re.I)
+    if m:
+        return m.group(1).strip()
+    return ""
 
 
 def _handle_commit(conversation_id: str, conv: Dict[str, Any], merchant: Dict[str, Any], category: Dict[str, Any], msg_norm: str) -> Dict[str, Any]:

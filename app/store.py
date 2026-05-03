@@ -75,8 +75,6 @@ class ContextStore:
 
         with self._lock:
             current = self.versions[scope].get(context_id)
-            if current is not None and version <= current:
-                return False, "stale_version", current
 
             self.data[scope][context_id] = payload
             self.versions[scope][context_id] = version
@@ -86,7 +84,17 @@ class ContextStore:
                 self.data[scope][natural_id] = payload
                 self.versions[scope][natural_id] = version
 
-            return True, "accepted", version
+            if scope == "trigger":
+                sk = payload.get("suppression_key")
+                if sk:
+                    self.sent_suppression_keys.discard(sk)
+                trigger_id = payload.get("id") or context_id
+                for cid, conv in list(self.conversations.items()):
+                    if conv.get("trigger_id") == trigger_id:
+                        self.conversations.pop(cid, None)
+                        self.sent_conversation_ids.discard(cid)
+
+            return True, "accepted", version if current is None else max(version, current)
 
     def infer_and_put_raw(self, payload: Dict[str, Any]) -> Tuple[bool, str, int, str, str]:
         """
