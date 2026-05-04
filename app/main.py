@@ -13,7 +13,7 @@ from .store import store
 
 TEAM_NAME = "VeraEdge"
 TEAM_MEMBERS = ["Yaswanth"]
-CONTACT_EMAIL = "yas@gmail.com"
+CONTACT_EMAIL = "yaswanthsai1805@gmail.com"
 BOT_VERSION = "1.1.0"
 
 app = FastAPI(title="VeraEdge", version=BOT_VERSION)
